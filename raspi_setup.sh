@@ -7,6 +7,14 @@ set -e  # 에러 나면 즉시 중단
 DEVICE_NUM=$1
 SSID=$2
 
+# 확인 후 Enter 대기 함수
+confirm() {
+    echo ""
+    echo "  ▶ $1"
+    read -p "  확인했으면 Enter를 눌러서 계속 진행..." _
+    echo ""
+}
+
 if [ -z "$DEVICE_NUM" ] || [ -z "$SSID" ]; then
     echo "Usage: $0 <device_number> <ssid>"
     echo "Example: $0 1 cos1"
@@ -43,8 +51,10 @@ sudo apt-get install -y openssh-server
 sudo update-rc.d ssh enable
 sudo service ssh start
 
+echo ""
 echo "       Verifying SSH on port 22:"
 sudo lsof -i:22
+confirm "위 결과에 sshd 프로세스가 보이면 OK. 아무것도 없으면 SSH 실행 실패."
 echo "[2/7] >> Done."
 
 # ─────────────────────────────
@@ -75,8 +85,10 @@ make -j$(nproc) && sudo make install
 sudo modprobe -r rtl8xxxu 2>/dev/null || true  # 없어도 에러 무시
 sudo modprobe 8188eu
 
+echo ""
 echo "       Verifying driver (8188eu):"
 lsmod | grep 8188eu || echo "WARNING: 8188eu not found in lsmod. Check build logs."
+confirm "위 결과에 8188eu가 보이면 OK. WARNING 떴으면 드라이버 설치 실패."
 cd ~
 echo "[3/7] >> Done."
 
@@ -96,6 +108,12 @@ cd cos-term-project-settings
 
 # ssid를 인자로 받은 값으로 교체
 sed -i "s/^ssid=.*/ssid=$SSID/" hostapd.conf
+
+# ssid가 제대로 바뀌었는지 확인
+echo ""
+echo "       Verifying SSID in hostapd.conf:"
+grep "^ssid=" hostapd.conf
+confirm "위 결과가 'ssid=$SSID' 로 나오면 OK. 다르면 sed 치환 실패."
 
 sudo cp dhcpcd.conf  /etc/dhcpcd.conf
 sudo cp dnsmasq.conf /etc/dnsmasq.conf
@@ -122,8 +140,20 @@ else
     sudo sysctl -p /etc/sysctl.d/99-ipforward.conf
 fi
 
+# ip_forward 적용 확인
+echo ""
+echo "       Verifying IP forwarding:"
+cat /proc/sys/net/ipv4/ip_forward
+confirm "위 결과가 '1' 이면 OK. '0' 이면 ip_forward 적용 실패."
+
 cd ~/cos-term-project-settings
 sudo ./iptables.sh
+
+# iptables 룰 확인
+echo ""
+echo "       Verifying iptables rules:"
+sudo iptables -t nat -L POSTROUTING -n -v
+confirm "위 결과에 MASQUERADE 룰이 보이면 OK. 아무것도 없으면 iptables.sh 실패."
 cd ~
 echo "[6/7] >> Done."
 
@@ -133,6 +163,12 @@ echo "[6/7] >> Done."
 echo ""
 echo "[7/7] >> Updating /etc/hosts..."
 echo "172.24.1.1 cos$DEVICE_NUM" | sudo tee -a /etc/hosts
+
+# /etc/hosts 확인
+echo ""
+echo "       Verifying /etc/hosts:"
+grep "cos$DEVICE_NUM" /etc/hosts
+confirm "위 결과가 '172.24.1.1 cos$DEVICE_NUM' 으로 나오면 OK."
 echo "[7/7] >> Done."
 
 # ─────────────────────────────

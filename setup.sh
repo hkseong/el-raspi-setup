@@ -21,7 +21,7 @@ confirm() {
     if [ "$CONFIRM_MODE" = true ]; then
         echo ""
         echo "  > $1"
-        read -p "  Press Enter to continue..." _
+        read -p "  Press [ENTER] to continue..." _
         echo ""
     fi
 }

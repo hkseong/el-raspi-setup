@@ -200,4 +200,9 @@ echo "Reboot now? (y/n)"
 read REBOOT
 if [ "$REBOOT" = "y" ]; then
     sudo reboot
+else
+    echo ""
+    echo "       Verifying services..."
+    sudo systemctl status hostapd
+    sudo systemctl status dnsmasq
 fi

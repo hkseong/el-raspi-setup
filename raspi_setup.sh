@@ -26,6 +26,13 @@ confirm() {
     fi
 }
 
+# 중복 방지 함수: 파일에 해당 문자열 없을 때만 추가
+append_once() {
+    local line="$1"
+    local file="$2"
+    grep -qF "$line" "$file" 2>/dev/null || echo "$line" | sudo tee -a "$file"
+}
+
 if [ -z "$DEVICE_NUM" ] || [ -z "$SSID" ]; then
     echo "Usage: $0 <device_number> <ssid> [-c]"
     echo "Example: $0 1 cos1"
@@ -49,6 +56,8 @@ cd ~
 sudo apt-get update
 sudo apt-get install -y vim git
 
+# conf 폴더 이미 있으면 삭제 후 클론
+rm -rf conf
 git clone https://github.com/hw5773/conf.git
 cd conf
 cp vimrc ~/.vimrc
@@ -82,17 +91,19 @@ echo "[3/7] >> Upgrading kernel & installing WiFi driver (rtl8188eus)..."
 sudo apt-get update && sudo apt-get upgrade -y
 sudo apt-get install -y dkms
 
+# rtl8188eus 폴더 이미 있으면 삭제 후 클론
+rm -rf rtl8188eus
 git clone https://github.com/gglluukk/rtl8188eus
 cd rtl8188eus
 
-# 커널 기본 드라이버 두 개 모두 블랙리스트 처리
+# 커널 기본 드라이버 두 개 모두 블랙리스트 처리 (중복 방지)
 # r8188eu: 구버전 내장 드라이버
 # rtl8xxxu: 신버전 라즈베리파이 OS에서 자동으로 붙는 드라이버
-echo 'blacklist r8188eu'  | sudo tee -a /etc/modprobe.d/realtek.conf
-echo 'blacklist rtl8xxxu' | sudo tee -a /etc/modprobe.d/realtek.conf
+append_once 'blacklist r8188eu'  /etc/modprobe.d/realtek.conf
+append_once 'blacklist rtl8xxxu' /etc/modprobe.d/realtek.conf
 
-# 부팅 시 8188eu 자동 로드 등록
-echo '8188eu' | sudo tee -a /etc/modules
+# 부팅 시 8188eu 자동 로드 등록 (중복 방지)
+append_once '8188eu' /etc/modules
 
 make -j$(nproc) && sudo make install
 
@@ -118,6 +129,9 @@ echo "[4/7] >> Done."
 
 echo ""
 echo "[5/7] >> Applying AP config files (ssid: $SSID)..."
+
+# cos-term-project-settings 폴더 이미 있으면 삭제 후 클론
+rm -rf ~/cos-term-project-settings
 git clone https://github.com/hw5773/cos-term-project-settings
 cd cos-term-project-settings
 
@@ -178,7 +192,9 @@ echo "[6/7] >> Done."
 # ─────────────────────────────
 echo ""
 echo "[7/7] >> Updating /etc/hosts..."
-echo "172.24.1.1 cos$DEVICE_NUM" | sudo tee -a /etc/hosts
+
+# /etc/hosts 중복 방지
+append_once "172.24.1.1 cos$DEVICE_NUM" /etc/hosts
 
 # /etc/hosts 확인
 echo ""

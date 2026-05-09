@@ -1,28 +1,43 @@
 #!/bin/bash
-# usage: ./setup.sh <device_number> <ssid>
+# usage: ./setup.sh <device_number> <ssid> [-c]
 # EX: ./setup.sh 1 cos1
+# EX: ./setup.sh 1 cos1 -c   (체크포인트마다 확인 후 Enter)
 
 set -e  # 에러 나면 즉시 중단
 
 DEVICE_NUM=$1
 SSID=$2
+CONFIRM_MODE=false
 
-# 확인 후 Enter 대기 함수
+# -c 옵션 파싱
+for arg in "$@"; do
+    if [ "$arg" = "-c" ]; then
+        CONFIRM_MODE=true
+    fi
+done
+
+# confirm 함수: -c 옵션 있을 때만 멈춤
 confirm() {
-    echo ""
-    echo "  ▶ $1"
-    read -p "  확인했으면 Enter를 눌러서 계속 진행..." _
-    echo ""
+    if [ "$CONFIRM_MODE" = true ]; then
+        echo ""
+        echo "  ▶ $1"
+        read -p "  확인했으면 Enter를 눌러서 계속 진행..." _
+        echo ""
+    fi
 }
 
 if [ -z "$DEVICE_NUM" ] || [ -z "$SSID" ]; then
-    echo "Usage: $0 <device_number> <ssid>"
+    echo "Usage: $0 <device_number> <ssid> [-c]"
     echo "Example: $0 1 cos1"
+    echo "Example: $0 1 cos1 -c   (체크포인트마다 확인)"
     exit 1
 fi
 
 echo "============================================"
 echo "   RasPi Setup Starting - Device #$DEVICE_NUM"
+if [ "$CONFIRM_MODE" = true ]; then
+    echo "   [Confirm Mode ON]"
+fi
 echo "============================================"
 
 # ─────────────────────────────
@@ -147,6 +162,7 @@ cat /proc/sys/net/ipv4/ip_forward
 confirm "위 결과가 '1' 이면 OK. '0' 이면 ip_forward 적용 실패."
 
 cd ~/cos-term-project-settings
+export DEBIAN_FRONTEND=noninteractive
 sudo ./iptables.sh
 
 # iptables 룰 확인

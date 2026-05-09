@@ -219,6 +219,6 @@ if [ "$REBOOT" = "y" ]; then
 else
     echo ""
     echo "       Verifying services..."
-    sudo systemctl status hostapd
-    sudo systemctl status dnsmasq
+    sudo systemctl status hostapd --no-pager
+    sudo systemctl status dnsmasq --no-pager
 fi

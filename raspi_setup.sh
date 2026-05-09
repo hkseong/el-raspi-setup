@@ -22,6 +22,7 @@ echo "============================================"
 # ─────────────────────────────
 echo ""
 echo "[1/7] >> Installing base packages & configuring vimrc..."
+cd ~
 sudo apt-get update
 sudo apt-get install -y vim git
 

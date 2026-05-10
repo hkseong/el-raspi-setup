@@ -39,7 +39,7 @@ append_once() {
 # 자동 체크 함수: 결과를 배열에 저장
 check() {
     local name="$1"
-    local result="$2"  # "ok" or "fail"
+    local result="$2"  # "ok", "fail", "reboot"
     CHECK_RESULTS["$name"]="$result"
 }
 
@@ -52,11 +52,15 @@ print_summary() {
     for key in "SSH" "WiFi Driver" "AP (hostapd)" "DHCP (dnsmasq)" "wlan1 IP" "IP Forwarding" "iptables" "/etc/hosts"; do
         local result="${CHECK_RESULTS[$key]}"
         if [ "$result" = "ok" ]; then
-            echo "  [OK]   $key"
+            echo "  [OK]      $key"
+        elif [ "$result" = "reboot" ]; then
+            echo "  [REBOOT]  $key  <- verify after reboot"
         else
-            echo "  [FAIL] $key"
+            echo "  [FAIL]    $key"
         fi
     done
+    echo "============================================"
+    echo "  Run ./verify.sh $DEVICE_NUM after reboot to confirm all items."
     echo "============================================"
 }
 
@@ -84,7 +88,6 @@ sudo apt-get update
 sudo apt-get install -y vim git
 
 cd ~/el-raspi-setup/conf
-
 cp vimrc ~/.vimrc
 sudo cp vimrc /root/.vimrc
 cd ~
@@ -123,9 +126,9 @@ sudo apt-get update && sudo apt-get upgrade -y
 sudo apt-get install -y dkms
 
 # rtl8188eus 폴더 이미 있으면 삭제 후 클론
-rm -rf rtl8188eus
-git clone https://github.com/gglluukk/rtl8188eus
-cd rtl8188eus
+rm -rf ~/rtl8188eus
+git clone https://github.com/gglluukk/rtl8188eus ~/rtl8188eus
+cd ~/rtl8188eus
 
 # 커널 기본 드라이버 두 개 모두 블랙리스트 처리 (중복 방지)
 # r8188eu: 구버전 내장 드라이버
@@ -183,25 +186,25 @@ confirm "Result should show 'ssid=$SSID'. If not, sed substitution failed."
 if systemctl list-units --type=service | grep -q dhcpcd; then
     sudo cp dhcpcd.conf /etc/dhcpcd.conf
 else
-    # dhcpcd 없는 경우: 직접 IP 할당
-    # wlan1에 연결된 기존 커넥션 끊기 (핫스팟 등)
-    sudo nmcli dev disconnect wlan1
-    # 재부팅 후에도 유지되도록 nmcli에 등록
+    # dhcpcd 없는 경우: NetworkManager로 wlan1 고정 IP 영구 설정
+    # 기존 wlan1 커넥션 전부 삭제
+    sudo nmcli con delete $(nmcli -t -f NAME,DEVICE con show | grep wlan1 | cut -d: -f1) 2>/dev/null || true
+    # wlan1 고정 IP 커넥션 생성 (재부팅 후에도 유지)
     sudo nmcli con add type ethernet ifname wlan1 ip4 172.24.1.1/24 ipv4.method manual autoconnect yes
-    sudo nmcli con up ifname wlan1
+    sudo nmcli con up ifname wlan1 2>/dev/null || true  # 지금 실패해도 재부팅 후 올라옴
 fi
 
 echo ""
-echo "       Verifying wlan1 IP:"
-ip addr show wlan1 | grep "inet " || echo "WARNING: 172.24.1.1 not found on wlan1."
+echo "       Verifying wlan1 IP (may show REBOOT if not yet active):"
+ip addr show wlan1 | grep "inet " || echo "NOTE: IP not yet active, will apply after reboot."
 
-# wlan1 IP 체크
+# wlan1 IP 체크: 지금 안 잡혀도 reboot으로 표시
 if ip addr show wlan1 | grep -q "172.24.1.1"; then
     check "wlan1 IP" "ok"
 else
-    check "wlan1 IP" "fail"
+    check "wlan1 IP" "reboot"
 fi
-confirm "Result should show '172.24.1.1'. If not, IP assignment failed."
+confirm "Result should show '172.24.1.1'. If not shown, it will apply after reboot."
 
 sudo cp dnsmasq.conf /etc/dnsmasq.conf
 sudo cp hostapd.conf /etc/hostapd/hostapd.conf
@@ -210,18 +213,9 @@ sudo update-rc.d dnsmasq enable
 sudo update-rc.d hostapd enable
 cd ~
 
-# hostapd / dnsmasq 체크
-if sudo systemctl is-active --quiet hostapd; then
-    check "AP (hostapd)" "ok"
-else
-    check "AP (hostapd)" "fail"
-fi
-
-if sudo systemctl is-active --quiet dnsmasq; then
-    check "DHCP (dnsmasq)" "ok"
-else
-    check "DHCP (dnsmasq)" "fail"
-fi
+# hostapd / dnsmasq: 재부팅 후 확인 필요
+check "AP (hostapd)" "reboot"
+check "DHCP (dnsmasq)" "reboot"
 
 echo "[5/7] >> Done."
 
@@ -261,9 +255,9 @@ echo ""
 echo "       Verifying iptables rules:"
 sudo iptables -t nat -L POSTROUTING -n -v
 
-# iptables 체크
+# iptables 체크: 재부팅 후 persistent 확인 필요
 if sudo iptables -t nat -L POSTROUTING -n -v | grep -q MASQUERADE; then
-    check "iptables" "ok"
+    check "iptables" "reboot"  # 지금은 ok지만 재부팅 후 persistent 확인 필요
 else
     check "iptables" "fail"
 fi

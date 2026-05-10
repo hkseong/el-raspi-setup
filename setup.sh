@@ -110,45 +110,53 @@ echo "[2/7] >> Done."
 # ─────────────────────────────
 # 4. WiFi 드라이버 설치
 # ─────────────────────────────
+# ─────────────────────────────
+# 4. WiFi 드라이버 설치
+# ─────────────────────────────
 echo ""
 echo "[3/7] >> Upgrading kernel & installing WiFi driver (rtl8188eus)..."
 
-sudo apt-get update && sudo apt-get upgrade -y
-sudo apt-get install -y dkms
-
-rm -rf ~/rtl8188eus
-git clone https://github.com/gglluukk/rtl8188eus ~/rtl8188eus
-cd ~/rtl8188eus
-
-# 블랙리스트 처리 (set -e 영향 안 받게 grep을 if로 감쌈)
-if ! grep -qF 'blacklist r8188eu' /etc/modprobe.d/realtek.conf 2>/dev/null; then
-    echo 'blacklist r8188eu' | sudo tee -a /etc/modprobe.d/realtek.conf
-fi
-if ! grep -qF 'blacklist rtl8xxxu' /etc/modprobe.d/realtek.conf 2>/dev/null; then
-    echo 'blacklist rtl8xxxu' | sudo tee -a /etc/modprobe.d/realtek.conf
-fi
-if ! grep -qF '8188eu' /etc/modules 2>/dev/null; then
-    echo '8188eu' | sudo tee -a /etc/modules
-fi
-
-make -j$(nproc) && sudo make install
-
-sudo modprobe -r rtl8xxxu 2>/dev/null || true
-sudo modprobe 8188eu
-
-echo ""
-echo "       Verifying driver (8188eu):"
-lsmod | grep 8188eu || echo "WARNING: 8188eu not found in lsmod."
-
+# 이미 8188eu 드라이버 로드되어 있으면 스킵
 if lsmod | grep -q 8188eu; then
+    echo "       8188eu already loaded. Skipping driver build."
     check "WiFi Driver" "ok"
 else
-    check "WiFi Driver" "fail"
-fi
-confirm "8188eu should be visible above. If WARNING showed, driver install failed."
-cd ~
-echo "[3/7] >> Done."
+    sudo apt-get update && sudo apt-get upgrade -y
+    sudo apt-get install -y dkms
 
+    rm -rf ~/rtl8188eus
+    git clone https://github.com/gglluukk/rtl8188eus ~/rtl8188eus
+    cd ~/rtl8188eus
+
+    # 블랙리스트 처리 (set -e 영향 안 받게 grep을 if로 감쌈)
+    if ! grep -qF 'blacklist r8188eu' /etc/modprobe.d/realtek.conf 2>/dev/null; then
+        echo 'blacklist r8188eu' | sudo tee -a /etc/modprobe.d/realtek.conf
+    fi
+    if ! grep -qF 'blacklist rtl8xxxu' /etc/modprobe.d/realtek.conf 2>/dev/null; then
+        echo 'blacklist rtl8xxxu' | sudo tee -a /etc/modprobe.d/realtek.conf
+    fi
+    if ! grep -qF '8188eu' /etc/modules 2>/dev/null; then
+        echo '8188eu' | sudo tee -a /etc/modules
+    fi
+
+    make -j$(nproc) && sudo make install
+
+    sudo modprobe -r rtl8xxxu 2>/dev/null || true
+    sudo modprobe 8188eu
+
+    echo ""
+    echo "       Verifying driver (8188eu):"
+    lsmod | grep 8188eu || echo "WARNING: 8188eu not found in lsmod."
+
+    if lsmod | grep -q 8188eu; then
+        check "WiFi Driver" "ok"
+    else
+        check "WiFi Driver" "fail"
+    fi
+    cd ~
+fi
+confirm "8188eu should be loaded. If WARNING showed, driver install failed."
+echo "[3/7] >> Done."
 # ─────────────────────────────
 # 5. AP 세팅 (dnsmasq, hostapd)
 # ─────────────────────────────

@@ -185,8 +185,8 @@ if systemctl list-units --type=service | grep -q dhcpcd; then
 else
     # dhcpcd 없는 경우: NetworkManager로 wlan1 고정 IP 설정
     sudo nmcli con delete "wlan1-static" 2>/dev/null || true  # 중복 방지
-    sudo nmcli con add type ethernet ifname wlan1 con-name "wlan1-static" ip4 172.24.1.1/24 ipv4.method manual
-    sudo nmcli con up "wlan1-static"
+    sudo nmcli con add type ethernet ifname wlan1 ip4 172.24.1.1/24 ipv4.method manual
+    sudo nmcli con up ifname wlan1
 fi
 
 echo ""

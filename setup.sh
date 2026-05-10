@@ -136,10 +136,21 @@ echo "[3/7] >> Done."
 # 5. AP 세팅 (dnsmasq, hostapd)
 # ─────────────────────────────
 echo ""
-echo "[4/7] >> Installing dnsmasq & hostapd..."
+echo "[4/7] >> Installing dnsmasq, hostapd & dhcpcd5..."
 sudo apt-get install -y dnsmasq hostapd
 sudo systemctl unmask hostapd
+
+# ─────────────────────────────
+# dhcpcd5 설치 (가이드 6번 방식 사용 위해)
+# 신버전 라즈베리파이 OS는 NetworkManager만 쓰지만,
+# 가이드는 dhcpcd 기반이므로 dhcpcd5 설치해서 가이드대로 동작시킴
+# ─────────────────────────────
+if ! systemctl list-units --type=service --all | grep -q dhcpcd; then
+    echo "       Installing dhcpcd5..."
+    sudo apt-get install -y dhcpcd5
+fi
 echo "[4/7] >> Done."
+
 echo ""
 echo "[5/7] >> Applying AP config files (ssid: $SSID)..."
 cd ~/el-raspi-setup/cos-term-project-settings
@@ -148,38 +159,33 @@ echo ""
 echo "       Verifying SSID in hostapd.conf:"
 grep "^ssid=" hostapd.conf
 confirm "Result should show 'ssid=$SSID'."
+
 # ─────────────────────────────
-# wlan1 고정 IP 설정 (강화 버전)
+# wlan1 고정 IP 설정 (dhcpcd 기반 = 가이드 그대로)
 # ─────────────────────────────
-if systemctl list-units --type=service | grep -q dhcpcd; then
-    sudo cp dhcpcd.conf /etc/dhcpcd.conf
-else
-    # 기존 wlan1 커넥션 전부 삭제
-    EXISTING=$(nmcli -t -f NAME,DEVICE con show | grep wlan1 | cut -d: -f1 || true)
-    if [ -n "$EXISTING" ]; then
-        echo "$EXISTING" | while read name; do
-            sudo nmcli con delete "$name" 2>/dev/null || true
-        done
-    fi
-    
-    # wlan1에 연결된 활성 네트워크 끊기
-    sudo nmcli dev disconnect wlan1 2>/dev/null || true
-    
-    # 새 프로파일 생성 (autoconnect yes로 부팅 시 자동 활성화)
-    sudo nmcli con add type wifi ifname wlan1 con-name "ap-wlan1" ssid "$SSID" \
-        ip4 172.24.1.1/24 ipv4.method manual \
-        connection.autoconnect yes \
-        connection.autoconnect-priority 100 \
-        802-11-wireless.mode ap
-    
-    # 즉시 IP도 박아넣기 (현재 세션용)
+# dhcpcd.conf 복사 (가이드 6번)
+sudo cp dhcpcd.conf /etc/dhcpcd.conf
+
+# wlan1을 NetworkManager에서 빼기 (NM이 dhcpcd랑 충돌하면 안 되니까)
+sudo tee /etc/NetworkManager/conf.d/unmanaged-wlan1.conf > /dev/null << 'NMEOF'
+[keyfile]
+unmanaged-devices=interface-name:wlan1
+NMEOF
+sudo systemctl restart NetworkManager 2>/dev/null || true
+sleep 2
+
+# dhcpcd 서비스 활성화 + 시작
+sudo systemctl enable dhcpcd 2>/dev/null || true
+sudo systemctl restart dhcpcd 2>/dev/null || true
+sleep 3
+
+# 그래도 IP 안 잡히면 즉시 직접 박기 (현재 세션용)
+if ! ip addr show wlan1 | grep -q "172.24.1.1"; then
     sudo ip addr flush dev wlan1 2>/dev/null || true
     sudo ip addr add 172.24.1.1/24 dev wlan1
     sudo ip link set wlan1 up
-    
-    # nmcli 프로파일 활성화 시도
-    sudo nmcli con up "ap-wlan1" 2>/dev/null || true
 fi
+
 echo ""
 echo "       Verifying wlan1 IP:"
 ip addr show wlan1 | grep "inet " || echo "WARNING: 172.24.1.1 not found on wlan1."
@@ -189,19 +195,18 @@ else
     check "wlan1 IP" "reboot"
 fi
 confirm "Result should show '172.24.1.1'."
+
 sudo cp dnsmasq.conf /etc/dnsmasq.conf
 sudo cp hostapd.conf /etc/hostapd/hostapd.conf
 
 # ─────────────────────────────
-# /etc/default/hostapd 의 DAEMON_CONF 설정 (가이드 8-2 누락분)
-# 이거 안 하면 부팅 후 hostapd 가 conf 읽지 못함
+# /etc/default/hostapd 의 DAEMON_CONF 설정 (가이드 8-2)
 # ─────────────────────────────
 if grep -qE '^#?DAEMON_CONF=' /etc/default/hostapd; then
     sudo sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
 else
     echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' | sudo tee -a /etc/default/hostapd > /dev/null
 fi
-
 echo ""
 echo "       Verifying DAEMON_CONF in /etc/default/hostapd:"
 grep '^DAEMON_CONF' /etc/default/hostapd || echo "WARNING: DAEMON_CONF not set."
@@ -242,14 +247,14 @@ cd ~/el-raspi-setup/cos-term-project-settings
 export DEBIAN_FRONTEND=noninteractive
 # iptables-persistent 강제 설치
 sudo apt-get install -y iptables-persistent
-# 직접 iptables 룰 추가 (iptables.sh 의존하지 않음)
+# 직접 iptables 룰 추가
 sudo iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
 sudo iptables -A FORWARD -i wlan0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT
 sudo iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
 # 강제로 저장 (재부팅 후에도 유지)
 sudo mkdir -p /etc/iptables
 sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null
-# netfilter-persistent 활성화 (재부팅 시 자동 로드)
+# netfilter-persistent 활성화
 sudo systemctl enable netfilter-persistent 2>/dev/null || true
 echo ""
 echo "       Verifying iptables rules:"
@@ -267,17 +272,17 @@ confirm "MASQUERADE rule should be visible above (both runtime and rules.v4)."
 cd ~
 echo "[6/7] >> Done."
 # ─────────────────────────────
-# 10. DNS 세팅 (/etc/hosts) - 강화 버전 + cloud-init 대응
+# 10. DNS 세팅 (/etc/hosts) - cloud-init 대응
 # ─────────────────────────────
 echo ""
 echo "[7/7] >> Updating /etc/hosts..."
 HOSTS_LINE="172.24.1.1 cos$DEVICE_NUM"
 
-# cloud-init이 /etc/hosts 덮어쓰는 경우 대응 (라즈베리파이 신버전 OS)
+# cloud-init이 /etc/hosts 덮어쓰는 경우 대응
 if [ -f /etc/cloud/templates/hosts.debian.tmpl ]; then
     if ! grep -qF "$HOSTS_LINE" /etc/cloud/templates/hosts.debian.tmpl; then
         echo "$HOSTS_LINE" | sudo tee -a /etc/cloud/templates/hosts.debian.tmpl > /dev/null
-        echo "       Added to cloud-init hosts template (persists across reboots)."
+        echo "       Added to cloud-init hosts template."
     fi
 fi
 

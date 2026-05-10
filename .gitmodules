@@ -1,6 +1,0 @@
-[submodule "conf"]
-	path = conf
-	url = https://github.com/hw5773/conf.git
-[submodule "cos-term-project-settings"]
-	path = cos-term-project-settings
-	url = https://github.com/hw5773/cos-term-project-settings

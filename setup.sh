@@ -9,6 +9,9 @@ DEVICE_NUM=$1
 SSID=$2
 CONFIRM_MODE=false
 
+# 체크 결과 저장 배열
+declare -A CHECK_RESULTS
+
 # -c 옵션 파싱
 for arg in "$@"; do
     if [ "$arg" = "-c" ]; then
@@ -31,6 +34,30 @@ append_once() {
     local line="$1"
     local file="$2"
     grep -qF "$line" "$file" 2>/dev/null || echo "$line" | sudo tee -a "$file"
+}
+
+# 자동 체크 함수: 결과를 배열에 저장
+check() {
+    local name="$1"
+    local result="$2"  # "ok" or "fail"
+    CHECK_RESULTS["$name"]="$result"
+}
+
+# 최종 결과 출력 함수
+print_summary() {
+    echo ""
+    echo "============================================"
+    echo "   Setup Summary - Device #$DEVICE_NUM"
+    echo "============================================"
+    for key in "SSH" "WiFi Driver" "AP (hostapd)" "DHCP (dnsmasq)" "wlan1 IP" "IP Forwarding" "iptables" "/etc/hosts"; do
+        local result="${CHECK_RESULTS[$key]}"
+        if [ "$result" = "ok" ]; then
+            echo "  [OK]   $key"
+        else
+            echo "  [FAIL] $key"
+        fi
+    done
+    echo "============================================"
 }
 
 if [ -z "$DEVICE_NUM" ] || [ -z "$SSID" ]; then
@@ -78,6 +105,13 @@ sudo service ssh start
 echo ""
 echo "       Verifying SSH on port 22:"
 sudo lsof -i:22
+
+# SSH 체크
+if sudo lsof -i:22 | grep -q sshd; then
+    check "SSH" "ok"
+else
+    check "SSH" "fail"
+fi
 confirm "sshd process should be visible above. If nothing shows, SSH failed to start."
 echo "[2/7] >> Done."
 
@@ -114,6 +148,13 @@ sudo modprobe 8188eu
 echo ""
 echo "       Verifying driver (8188eu):"
 lsmod | grep 8188eu || echo "WARNING: 8188eu not found in lsmod. Check build logs."
+
+# 드라이버 체크
+if lsmod | grep -q 8188eu; then
+    check "WiFi Driver" "ok"
+else
+    check "WiFi Driver" "fail"
+fi
 confirm "8188eu should be visible above. If WARNING showed, driver install failed."
 cd ~
 echo "[3/7] >> Done."
@@ -144,8 +185,9 @@ echo "       Verifying SSID in hostapd.conf:"
 grep "^ssid=" hostapd.conf
 confirm "Result should show 'ssid=$SSID'. If not, sed substitution failed."
 
+# dhcpcd 있으면 기존 방식, 없으면 NetworkManager 방식
 if systemctl list-units --type=service | grep -q dhcpcd; then
-    sudo cp dhcpcd.conf  /etc/dhcpcd.conf
+    sudo cp dhcpcd.conf /etc/dhcpcd.conf
 else
     # dhcpcd 없는 경우: NetworkManager로 wlan1 고정 IP 설정
     sudo nmcli con delete "wlan1-static" 2>/dev/null || true  # 중복 방지
@@ -155,7 +197,14 @@ fi
 
 echo ""
 echo "       Verifying wlan1 IP:"
-ip addr show wlan1 | grep "inet "
+ip addr show wlan1 | grep "inet " || echo "WARNING: 172.24.1.1 not found on wlan1."
+
+# wlan1 IP 체크
+if ip addr show wlan1 | grep -q "172.24.1.1"; then
+    check "wlan1 IP" "ok"
+else
+    check "wlan1 IP" "fail"
+fi
 confirm "Result should show '172.24.1.1'. If not, IP assignment failed."
 
 sudo cp dnsmasq.conf /etc/dnsmasq.conf
@@ -164,6 +213,20 @@ sudo cp hostapd.conf /etc/hostapd/hostapd.conf
 sudo update-rc.d dnsmasq enable
 sudo update-rc.d hostapd enable
 cd ~
+
+# hostapd / dnsmasq 체크
+if sudo systemctl is-active --quiet hostapd; then
+    check "AP (hostapd)" "ok"
+else
+    check "AP (hostapd)" "fail"
+fi
+
+if sudo systemctl is-active --quiet dnsmasq; then
+    check "DHCP (dnsmasq)" "ok"
+else
+    check "DHCP (dnsmasq)" "fail"
+fi
+
 echo "[5/7] >> Done."
 
 # ─────────────────────────────────────────────
@@ -182,20 +245,32 @@ else
     sudo sysctl -p /etc/sysctl.d/99-ipforward.conf
 fi
 
-# ip_forward 적용 확인
 echo ""
 echo "       Verifying IP forwarding:"
 cat /proc/sys/net/ipv4/ip_forward
+
+# ip_forward 체크
+if [ "$(cat /proc/sys/net/ipv4/ip_forward)" = "1" ]; then
+    check "IP Forwarding" "ok"
+else
+    check "IP Forwarding" "fail"
+fi
 confirm "Result should be '1'. If '0', ip_forward setting failed."
 
 cd ~/cos-term-project-settings
 export DEBIAN_FRONTEND=noninteractive
 sudo ./iptables.sh
 
-# iptables 룰 확인
 echo ""
 echo "       Verifying iptables rules:"
 sudo iptables -t nat -L POSTROUTING -n -v
+
+# iptables 체크
+if sudo iptables -t nat -L POSTROUTING -n -v | grep -q MASQUERADE; then
+    check "iptables" "ok"
+else
+    check "iptables" "fail"
+fi
 confirm "MASQUERADE rule should be visible above. If nothing shows, iptables.sh failed."
 cd ~
 echo "[6/7] >> Done."
@@ -209,29 +284,27 @@ echo "[7/7] >> Updating /etc/hosts..."
 # /etc/hosts 중복 방지
 append_once "172.24.1.1 cos$DEVICE_NUM" /etc/hosts
 
-# /etc/hosts 확인
 echo ""
 echo "       Verifying /etc/hosts:"
-grep "cos$DEVICE_NUM" /etc/hosts
+grep "cos$DEVICE_NUM" /etc/hosts || echo "WARNING: entry not found in /etc/hosts."
+
+# /etc/hosts 체크
+if grep -q "172.24.1.1 cos$DEVICE_NUM" /etc/hosts; then
+    check "/etc/hosts" "ok"
+else
+    check "/etc/hosts" "fail"
+fi
 confirm "Result should show '172.24.1.1 cos$DEVICE_NUM'."
 echo "[7/7] >> Done."
 
 # ─────────────────────────────
-# 완료
+# 완료 + 최종 요약
 # ─────────────────────────────
-echo ""
-echo "============================================"
-echo "   All steps completed for Device #$DEVICE_NUM!"
-echo "   Reboot is strongly recommended."
-echo "============================================"
+print_summary
+
 echo ""
 echo "Reboot now? (y/n)"
 read REBOOT
 if [ "$REBOOT" = "y" ]; then
     sudo reboot
-else
-    echo ""
-    echo "       Verifying services..."
-    sudo systemctl status hostapd --no-pager
-    sudo systemctl status dnsmasq --no-pager
 fi

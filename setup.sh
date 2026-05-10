@@ -183,9 +183,15 @@ confirm "Result should show 'ssid=$SSID'. If not, sed substitution failed."
 if systemctl list-units --type=service | grep -q dhcpcd; then
     sudo cp dhcpcd.conf /etc/dhcpcd.conf
 else
-    # dhcpcd 없는 경우: NetworkManager로 wlan1 고정 IP 설정
+    # dhcpcd 없는 경우: 직접 IP 할당
+    # wlan1에 연결된 기존 커넥션 끊기 (핫스팟 등)
+    sudo nmcli dev disconnect wlan1
+    # 직접 IP 할당
+    sudo ip addr flush dev wlan1
+    sudo ip addr add 172.24.1.1/24 dev wlan1
+    sudo ip link set wlan1 up
+    # 재부팅 후에도 유지되도록 nmcli에 등록
     sudo nmcli con add type ethernet ifname wlan1 ip4 172.24.1.1/24 ipv4.method manual
-    sudo nmcli con up ifname wlan1
 fi
 
 echo ""

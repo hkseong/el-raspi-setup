@@ -29,13 +29,6 @@ confirm() {
     fi
 }
 
-# 중복 방지 함수: 파일에 해당 문자열 없을 때만 추가
-append_once() {
-    local line="$1"
-    local file="$2"
-    grep -qF "$line" "$file" 2>/dev/null || echo "$line" | sudo tee -a "$file"
-}
-
 # 자동 체크 함수: 결과를 배열에 저장
 check() {
     local name="$1"
@@ -106,7 +99,6 @@ echo ""
 echo "       Verifying SSH on port 22:"
 sudo lsof -i:22
 
-# SSH 체크
 if sudo lsof -i:22 | grep -q sshd; then
     check "SSH" "ok"
 else
@@ -121,35 +113,33 @@ echo "[2/7] >> Done."
 echo ""
 echo "[3/7] >> Upgrading kernel & installing WiFi driver (rtl8188eus)..."
 
-# 커널 v6.1로 업그레이드 (드라이버 호환성 필요)
 sudo apt-get update && sudo apt-get upgrade -y
 sudo apt-get install -y dkms
 
-# rtl8188eus 폴더 이미 있으면 삭제 후 클론
 rm -rf ~/rtl8188eus
 git clone https://github.com/gglluukk/rtl8188eus ~/rtl8188eus
 cd ~/rtl8188eus
 
-# 커널 기본 드라이버 두 개 모두 블랙리스트 처리 (중복 방지)
-# r8188eu: 구버전 내장 드라이버
-# rtl8xxxu: 신버전 라즈베리파이 OS에서 자동으로 붙는 드라이버
-append_once 'blacklist r8188eu'  /etc/modprobe.d/realtek.conf
-append_once 'blacklist rtl8xxxu' /etc/modprobe.d/realtek.conf
-
-# 부팅 시 8188eu 자동 로드 등록 (중복 방지)
-append_once '8188eu' /etc/modules
+# 블랙리스트 처리 (set -e 영향 안 받게 grep을 if로 감쌈)
+if ! grep -qF 'blacklist r8188eu' /etc/modprobe.d/realtek.conf 2>/dev/null; then
+    echo 'blacklist r8188eu' | sudo tee -a /etc/modprobe.d/realtek.conf
+fi
+if ! grep -qF 'blacklist rtl8xxxu' /etc/modprobe.d/realtek.conf 2>/dev/null; then
+    echo 'blacklist rtl8xxxu' | sudo tee -a /etc/modprobe.d/realtek.conf
+fi
+if ! grep -qF '8188eu' /etc/modules 2>/dev/null; then
+    echo '8188eu' | sudo tee -a /etc/modules
+fi
 
 make -j$(nproc) && sudo make install
 
-# 현재 세션에서 기본 드라이버 언로드 후 새 드라이버 로드
-sudo modprobe -r rtl8xxxu 2>/dev/null || true  # 없어도 에러 무시
+sudo modprobe -r rtl8xxxu 2>/dev/null || true
 sudo modprobe 8188eu
 
 echo ""
 echo "       Verifying driver (8188eu):"
-lsmod | grep 8188eu || echo "WARNING: 8188eu not found in lsmod. Check build logs."
+lsmod | grep 8188eu || echo "WARNING: 8188eu not found in lsmod."
 
-# 드라이버 체크
 if lsmod | grep -q 8188eu; then
     check "WiFi Driver" "ok"
 else
@@ -173,38 +163,55 @@ echo "[5/7] >> Applying AP config files (ssid: $SSID)..."
 
 cd ~/el-raspi-setup/cos-term-project-settings
 
-# ssid를 인자로 받은 값으로 교체
 sed -i "s/^ssid=.*/ssid=$SSID/" hostapd.conf
 
-# ssid가 제대로 바뀌었는지 확인
 echo ""
 echo "       Verifying SSID in hostapd.conf:"
 grep "^ssid=" hostapd.conf
-confirm "Result should show 'ssid=$SSID'. If not, sed substitution failed."
+confirm "Result should show 'ssid=$SSID'."
 
-# dhcpcd 있으면 기존 방식, 없으면 NetworkManager 방식
+# ─────────────────────────────
+# wlan1 고정 IP 설정 (강화 버전)
+# ─────────────────────────────
 if systemctl list-units --type=service | grep -q dhcpcd; then
     sudo cp dhcpcd.conf /etc/dhcpcd.conf
 else
-    # dhcpcd 없는 경우: NetworkManager로 wlan1 고정 IP 영구 설정
     # 기존 wlan1 커넥션 전부 삭제
-    sudo nmcli con delete $(nmcli -t -f NAME,DEVICE con show | grep wlan1 | cut -d: -f1) 2>/dev/null || true
-    # wlan1 고정 IP 커넥션 생성 (재부팅 후에도 유지)
-    sudo nmcli con add type ethernet ifname wlan1 ip4 172.24.1.1/24 ipv4.method manual autoconnect yes
-    sudo nmcli con up ifname wlan1 2>/dev/null || true  # 지금 실패해도 재부팅 후 올라옴
+    EXISTING=$(nmcli -t -f NAME,DEVICE con show | grep wlan1 | cut -d: -f1 || true)
+    if [ -n "$EXISTING" ]; then
+        echo "$EXISTING" | while read name; do
+            sudo nmcli con delete "$name" 2>/dev/null || true
+        done
+    fi
+    
+    # wlan1에 연결된 활성 네트워크 끊기
+    sudo nmcli dev disconnect wlan1 2>/dev/null || true
+    
+    # 새 프로파일 생성 (autoconnect yes로 부팅 시 자동 활성화)
+    sudo nmcli con add type ethernet ifname wlan1 con-name "ap-wlan1" \
+        ip4 172.24.1.1/24 ipv4.method manual \
+        connection.autoconnect yes \
+        connection.autoconnect-priority 100
+    
+    # 즉시 IP도 박아넣기 (현재 세션용)
+    sudo ip addr flush dev wlan1 2>/dev/null || true
+    sudo ip addr add 172.24.1.1/24 dev wlan1
+    sudo ip link set wlan1 up
+    
+    # nmcli 프로파일 활성화 시도
+    sudo nmcli con up "ap-wlan1" 2>/dev/null || true
 fi
 
 echo ""
-echo "       Verifying wlan1 IP (may show REBOOT if not yet active):"
-ip addr show wlan1 | grep "inet " || echo "NOTE: IP not yet active, will apply after reboot."
+echo "       Verifying wlan1 IP:"
+ip addr show wlan1 | grep "inet " || echo "WARNING: 172.24.1.1 not found on wlan1."
 
-# wlan1 IP 체크: 지금 안 잡혀도 reboot으로 표시
 if ip addr show wlan1 | grep -q "172.24.1.1"; then
     check "wlan1 IP" "ok"
 else
     check "wlan1 IP" "reboot"
 fi
-confirm "Result should show '172.24.1.1'. If not shown, it will apply after reboot."
+confirm "Result should show '172.24.1.1'."
 
 sudo cp dnsmasq.conf /etc/dnsmasq.conf
 sudo cp hostapd.conf /etc/hostapd/hostapd.conf
@@ -213,7 +220,7 @@ sudo update-rc.d dnsmasq enable
 sudo update-rc.d hostapd enable
 cd ~
 
-# hostapd / dnsmasq: 재부팅 후 확인 필요
+# hostapd / dnsmasq: 재부팅 후 확인
 check "AP (hostapd)" "reboot"
 check "DHCP (dnsmasq)" "reboot"
 
@@ -225,8 +232,6 @@ echo "[5/7] >> Done."
 echo ""
 echo "[6/7] >> Configuring bridge (IP forwarding + iptables)..."
 
-# /etc/sysctl.conf 가 없는 환경(라즈베리파이 OS 신버전)은
-# /etc/sysctl.d/ 에 별도 파일로 관리함
 if [ -f /etc/sysctl.conf ]; then
     sudo sed -i 's/^#\s*net\.ipv4\.ip_forward\s*=\s*1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
     sudo sysctl -p
@@ -239,52 +244,76 @@ echo ""
 echo "       Verifying IP forwarding:"
 cat /proc/sys/net/ipv4/ip_forward
 
-# ip_forward 체크
 if [ "$(cat /proc/sys/net/ipv4/ip_forward)" = "1" ]; then
     check "IP Forwarding" "ok"
 else
     check "IP Forwarding" "fail"
 fi
-confirm "Result should be '1'. If '0', ip_forward setting failed."
+confirm "Result should be '1'."
 
+# ─────────────────────────────
+# iptables 설정 (강화 버전)
+# ─────────────────────────────
 cd ~/el-raspi-setup/cos-term-project-settings
 export DEBIAN_FRONTEND=noninteractive
-sudo ./iptables.sh
+
+# iptables-persistent 강제 설치
+sudo apt-get install -y iptables-persistent
+
+# 직접 iptables 룰 추가 (iptables.sh 의존하지 않음)
+sudo iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+sudo iptables -A FORWARD -i wlan0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+sudo iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
+
+# 강제로 저장 (재부팅 후에도 유지)
+sudo mkdir -p /etc/iptables
+sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null
+
+# netfilter-persistent 활성화 (재부팅 시 자동 로드)
+sudo systemctl enable netfilter-persistent 2>/dev/null || true
 
 echo ""
 echo "       Verifying iptables rules:"
 sudo iptables -t nat -L POSTROUTING -n -v
 
-# iptables 체크: 재부팅 후 persistent 확인 필요
-if sudo iptables -t nat -L POSTROUTING -n -v | grep -q MASQUERADE; then
-    check "iptables" "reboot"  # 지금은 ok지만 재부팅 후 persistent 확인 필요
+echo ""
+echo "       Verifying iptables persistence (rules.v4):"
+sudo cat /etc/iptables/rules.v4 | grep -E "MASQUERADE|FORWARD" || echo "WARNING: rules.v4 empty."
+
+if sudo iptables -t nat -L POSTROUTING -n -v | grep -q MASQUERADE && \
+   sudo cat /etc/iptables/rules.v4 2>/dev/null | grep -q MASQUERADE; then
+    check "iptables" "ok"
 else
     check "iptables" "fail"
 fi
-confirm "MASQUERADE rule should be visible above. If nothing shows, iptables.sh failed."
+confirm "MASQUERADE rule should be visible above (both runtime and rules.v4)."
 cd ~
 echo "[6/7] >> Done."
 
 # ─────────────────────────────
-# 10. DNS 세팅 (/etc/hosts)
+# 10. DNS 세팅 (/etc/hosts) - 강화 버전
 # ─────────────────────────────
 echo ""
 echo "[7/7] >> Updating /etc/hosts..."
 
-# /etc/hosts 중복 방지
-append_once "172.24.1.1 cos$DEVICE_NUM" /etc/hosts
+HOSTS_LINE="172.24.1.1 cos$DEVICE_NUM"
+if grep -qF "$HOSTS_LINE" /etc/hosts; then
+    echo "       Already exists in /etc/hosts."
+else
+    echo "$HOSTS_LINE" | sudo tee -a /etc/hosts > /dev/null
+    echo "       Added '$HOSTS_LINE' to /etc/hosts."
+fi
 
 echo ""
 echo "       Verifying /etc/hosts:"
-grep "cos$DEVICE_NUM" /etc/hosts || echo "WARNING: entry not found in /etc/hosts."
+grep "172.24.1.1" /etc/hosts || echo "WARNING: 172.24.1.1 not found in /etc/hosts."
 
-# /etc/hosts 체크
-if grep -q "172.24.1.1 cos$DEVICE_NUM" /etc/hosts; then
+if grep -qF "$HOSTS_LINE" /etc/hosts; then
     check "/etc/hosts" "ok"
 else
     check "/etc/hosts" "fail"
 fi
-confirm "Result should show '172.24.1.1 cos$DEVICE_NUM'."
+confirm "Result should show '$HOSTS_LINE'."
 echo "[7/7] >> Done."
 
 # ─────────────────────────────

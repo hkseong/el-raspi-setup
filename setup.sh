@@ -83,14 +83,11 @@ cd ~
 sudo apt-get update
 sudo apt-get install -y vim git
 
-# conf 폴더 이미 있으면 삭제 후 클론
-rm -rf conf
-git clone https://github.com/hw5773/conf.git
-cd conf
+cd ~/el-raspi-setup/conf
+
 cp vimrc ~/.vimrc
 sudo cp vimrc /root/.vimrc
 cd ~
-rm -rf conf
 echo "[1/7] >> Done."
 
 # ─────────────────────────────
@@ -171,10 +168,7 @@ echo "[4/7] >> Done."
 echo ""
 echo "[5/7] >> Applying AP config files (ssid: $SSID)..."
 
-# cos-term-project-settings 폴더 이미 있으면 삭제 후 클론
-rm -rf ~/cos-term-project-settings
-git clone https://github.com/hw5773/cos-term-project-settings
-cd cos-term-project-settings
+cd ~/el-raspi-setup/cos-term-project-settings
 
 # ssid를 인자로 받은 값으로 교체
 sed -i "s/^ssid=.*/ssid=$SSID/" hostapd.conf
@@ -257,7 +251,7 @@ else
 fi
 confirm "Result should be '1'. If '0', ip_forward setting failed."
 
-cd ~/cos-term-project-settings
+cd ~/el-raspi-setup/cos-term-project-settings
 export DEBIAN_FRONTEND=noninteractive
 sudo ./iptables.sh
 
